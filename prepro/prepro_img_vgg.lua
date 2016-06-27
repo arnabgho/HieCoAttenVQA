@@ -17,16 +17,19 @@ cmd = torch.CmdLine()
 cmd:text()
 cmd:text('Options')
 cmd:option('-input_json','../data/vqa_data_prepro.json','path to the json file containing vocab and answers')
-cmd:option('-image_root','/home/jiasenlu/data/','path to the image root')
-cmd:option('-cnn_proto', '../image_model/VGG_ILSVRC_19_layers_deploy.prototxt', 'path to the cnn prototxt')
-cmd:option('-cnn_model', '../image_model/VGG_ILSVRC_19_layers.caffemodel', 'path to the cnn model')
+--cmd:option('-input_json','../data/vqa_raw_train.json','path to the json file containing vocab and answers')
+cmd:option('-image_root','../vt-data/','path to the image root')
+cmd:option('-cnn_model', '../../VGG-19/VGG_ILSVRC_19_layers.caffemodel', 'path to the cnn model')
+cmd:option('-cnn_proto', '../../VGG-19/VGG_ILSVRC_19_layers_deploy.prototxt', 'path to the cnn model prototxt ')
+
+
 
 cmd:option('-batch_size', 20, 'batch_size')
 
 cmd:option('-out_name_train', '../data/vqa_data_img_vgg_train.h5', 'output name train')
 cmd:option('-out_name_test', '../data/vqa_data_img_vgg_test.h5', 'output name test')
 
-cmd:option('-gpuid', 6, 'which gpu to use. -1 = use CPU')
+cmd:option('-gpuid', 0, 'which gpu to use. -1 = use CPU')
 cmd:option('-backend', 'cudnn', 'nn|cudnn')
 
 opt = cmd:parse(arg)
@@ -142,4 +145,7 @@ local test_h5_file = hdf5.open(opt.out_name_test, 'w')
 test_h5_file:write('/images_test', feat_test)
 test_h5_file:close()    
 
-
+-- notes 
+-- Creates a list of image files whose relative path are provided and 
+-- Loades the CNN activations of the said layer into a tensor which is
+-- Further copied to a hdf5 file

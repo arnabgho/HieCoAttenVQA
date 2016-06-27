@@ -4,7 +4,8 @@
 --  https://arxiv.org/abs/1606.00061, 2016
 --  if you have any question about the code, please contact jiasenlu@vt.edu
 -----------------------------------------------------------------------------
-
+--
+-- Check whether the dependency files need to be changed to the ones with the image fact 
 require 'nn'
 require 'torch'
 require 'optim'
@@ -27,6 +28,7 @@ cmd:text('Train a Visual Question Answering model')
 cmd:text()
 cmd:text('Options')
 
+-- Check that the data input files are correct for the Visual Genome Dataset
 -- Data input settings
 cmd:option('-input_img_train_h5','data/vqa_data_img_vgg_train.h5','path to the h5file containing the image feature')
 cmd:option('-input_img_test_h5','data/vqa_data_img_vgg_test.h5','path to the h5file containing the image feature')
@@ -34,15 +36,12 @@ cmd:option('-input_ques_h5','data/vqa_data_prepro.h5','path to the h5file contai
 cmd:option('-input_json','data/vqa_data_prepro.json','path to the json file containing additional info and vocab')
 
 cmd:option('-start_from', '', 'path to a model checkpoint to initialize model weights from. Empty = don\'t')
-cmd:option('-co_atten_type', 'Parallel', 'co_attention type. Parallel or Alternating, alternating trains more faster than parallel.')
+cmd:option('-co_atten_type', 'Alternating', 'co_attention type. Parallel or Alternating, alternating trains more faster than parallel.')
 cmd:option('-feature_type', 'VGG', 'VGG or Residual')
 
 
 cmd:option('-hidden_size',512,'the hidden layer size of the model.')
---cmd:option('-rnn_size',512,'size of the rnn in number of hidden nodes in each layer')
---cmd:option('-hidden_size',1024,'the hidden layer size of the model.')
 cmd:option('-rnn_size',512,'size of the rnn in number of hidden nodes in each layer')
-
 cmd:option('-batch_size',200,'what is theutils batch size in number of images per batch? (there will be x seq_per_img sentences)')
 cmd:option('-output_size', 1000, 'number of output answers')
 cmd:option('-rnn_layers',2,'number of the rnn layer')
@@ -65,6 +64,10 @@ cmd:option('-checkpoint_path', 'save/train_vgg', 'folder to save checkpoints int
 
 -- Visualization
 cmd:option('-losses_log_every', 600, 'How often do we save losses, for inclusion in the progress dump? (0 = disable)')
+
+
+-- Add the parameters for the image_fact features such as image_fact_size etc and the maximum number of relations
+
 
 -- misc
 cmd:option('-id', '0', 'an id identifying this run/job. used in cross-val and appended when writing progress files')
@@ -97,6 +100,7 @@ opt = cmd:parse(arg)
 -------------------------------------------------------------------------------
 -- Create the Data Loader instance
 -------------------------------------------------------------------------------
+--Add the data loader for the image fact representation 
 local loader = DataLoader{h5_img_file_train = opt.input_img_train_h5, h5_img_file_test = opt.input_img_test_h5, h5_ques_file = opt.input_ques_h5, json_file = opt.input_json, feature_type = opt.feature_type}
 ------------------------------------------------------------------------
 --Design Parameters and Network Definitions
@@ -127,9 +131,11 @@ end
 protos.word = nn.word_level(lmOpt)
 protos.phrase = nn.phrase_level(lmOpt)
 protos.ques = nn.ques_level(lmOpt)
+protos.img_fact_encoding=nn.img_fact_encoding(lmOpt)
 
 protos.atten = nn.recursive_atten()
 protos.crit = nn.CrossEntropyCriterion()
+
 -- ship everything to GPU, maybe
 
 if opt.gpuid >= 0 then
@@ -140,7 +146,7 @@ local wparams, grad_wparams = protos.word:getParameters()
 local pparams, grad_pparams = protos.phrase:getParameters()
 local qparams, grad_qparams = protos.ques:getParameters()
 local aparams, grad_aparams = protos.atten:getParameters()
-
+local iparams, grad_iparams = protos.img_fact_encoding:getParameters()
 
 if string.len(opt.start_from) > 0 then
   print('Load the weight...')
@@ -148,6 +154,7 @@ if string.len(opt.start_from) > 0 then
   pparams:copy(loaded_checkpoint.pparams)
   qparams:copy(loaded_checkpoint.qparams)
   aparams:copy(loaded_checkpoint.aparams)
+  iparams:copy(loaded_checkpoint,iparams)
 end
 
 print('total number of parameters in word_level: ', wparams:nElement())
@@ -163,6 +170,10 @@ protos.ques:shareClones()
 print('total number of parameters in recursive_attention: ', aparams:nElement())
 assert(aparams:nElement() == grad_aparams:nElement())
 
+print('total number of parameters in img_fact_encoding: ', iparams:nElement())
+assert(iparams:nElement() == grad_iparams:nElement())
+
+
 collectgarbage() 
 
 -------------------------------------------------------------------------------
@@ -174,6 +185,7 @@ local function eval_split(split)
   protos.phrase:evaluate()
   protos.ques:evaluate()
   protos.atten:evaluate()
+  protos.img_fact_encoding:evaluate()
   loader:resetIterator(split)
 
   local n = 0
@@ -190,10 +202,14 @@ local function eval_split(split)
       data.images = data.images:cuda()
       data.questions = data.questions:cuda()
       data.ques_len = data.ques_len:cuda()
+      data.img_fact=data.img_fact:cuda()
     end
   n = n + data.images:size(1)
   xlua.progress(n, total_num)
   
+  local img_fact_feat=protos.img_fact_encoding:forward( { data.img_fact  }  )
+
+  -- Check what all needs to be added here to accommodate the img_fact_feat
   local word_feat, img_feat, w_ques, w_img, mask = unpack(protos.word:forward({data.questions, data.images}))
 
   local conv_feat, p_ques, p_img = unpack(protos.phrase:forward({word_feat, data.ques_len, img_feat, mask}))
@@ -228,7 +244,7 @@ end
 -- Loss function
 -------------------------------------------------------------------------------
 local iter = 0
-local function lossFun()
+local function lossFun()        -- The MVP , see what the individual functions are doing 
   protos.word:training()
   grad_wparams:zero()  
 
@@ -251,8 +267,13 @@ local function lossFun()
     data.questions = data.questions:cuda()
     data.ques_len = data.ques_len:cuda()
     data.images = data.images:cuda()
+    data.img_fact=data.img_fact:cuda()
   end
 
+  local img_fact_feat=protos.img_fact_encoding:forward( { data.img_fact  }  )
+
+
+  -- Check what all needs to be modified in these files to accommodate img_fact_feat
   local word_feat, img_feat, w_ques, w_img, mask = unpack(protos.word:forward({data.questions, data.images}))
 
   local conv_feat, p_ques, p_img = unpack(protos.phrase:forward({word_feat, data.ques_len, img_feat, mask}))
@@ -279,6 +300,9 @@ local function lossFun()
   
   local dummy = protos.word:backward({data.questions, data.images}, {d_conv_feat, d_w_ques, d_w_img, d_conv_img, d_ques_img})
 
+  -- Check the modification that needs to be done to allow to backpropagate through image_fact_encoding
+  --
+  --
   -----------------------------------------------------------------------------
   -- and lets get out!
   local stats = {}
@@ -297,6 +321,7 @@ local w_optim_state = {}
 local p_optim_state = {}
 local q_optim_state = {}
 local a_optim_state = {}
+local i_optim_state = {}
 local loss_history = {}
 local accuracy_history = {}
 local learning_rate_history = {}
@@ -333,9 +358,6 @@ while true do
       local val_loss, val_accu = eval_split(2)
       print('validation loss: ', val_loss, 'accuracy ', val_accu)
 
-      --local test_loss,test_accu=eval_split(1)
-      --print("test loss: ",test_loss , " accuracy ",test_accu)
-
       local checkpoint_path = path.join(opt.checkpoint_path .. '_' .. opt.co_atten_type, 'model_id' .. opt.id .. '_iter'.. iter)
       torch.save(checkpoint_path..'.t7', {wparams=wparams, pparams = pparams, qparams=qparams, aparams=aparams, lmOpt=lmOpt}) 
 
@@ -359,6 +381,9 @@ while true do
     rmsprop(pparams, grad_pparams, learning_rate, opt.optim_alpha, opt.optim_epsilon, p_optim_state)
     rmsprop(qparams, grad_qparams, learning_rate, opt.optim_alpha, opt.optim_epsilon, q_optim_state)
     rmsprop(aparams, grad_aparams, learning_rate, opt.optim_alpha, opt.optim_epsilon, a_optim_state)
+    rmsprop(iparams, grad_iparams, learning_rate, opt.optim_alpha, opt.optim_epsilon, i_optim_state)
+
+
   else
     error('bad option opt.optim')
   end

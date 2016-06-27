@@ -1,7 +1,7 @@
 """
 Preoricess a raw json dataset into hdf5/json files.
 
-Caption: Use NLTK or split function to get tokens. 
+Caption: Use NLTK or split function to get tokens.
 """
 from random import shuffle, seed
 import sys
@@ -16,12 +16,15 @@ import json
 import re
 import math
 
+#Start adding notes on what each of the functions do
 
+
+# Tokenizer removes empty spaces and removes end of line sequences
 def tokenize(sentence):
     return [i for i in re.split(r"([-.\"',:? !\$#@~()*&\^%;\[\]/\\\+<>\n=])", sentence) if i!='' and i!=' ' and i!='\n'];
 
 def prepro_question(imgs, params):
-  
+
     # preprocess all the question
     print 'example processed tokens:'
     for i,img in enumerate(imgs):
@@ -35,7 +38,7 @@ def prepro_question(imgs, params):
         if i < 10: print txt
         if i % 1000 == 0:
             sys.stdout.write("processing %d/%d (%.2f%% done)   \r" %  (i, len(imgs), i*100.0/len(imgs)) )
-            sys.stdout.flush()   
+            sys.stdout.flush()
     return imgs
 
 def build_vocab_question(imgs, params):
@@ -67,7 +70,7 @@ def build_vocab_question(imgs, params):
     # additional special UNK token we will use below to map infrequent words to
     print 'inserting the special UNK token'
     vocab.append('UNK')
-  
+
     for img in imgs:
         txt = img['processed_tokens']
         question = [w if counts.get(w,0) > count_thr else 'UNK' for w in txt]
@@ -87,13 +90,13 @@ def apply_vocab_question(imgs, wtoi):
 def get_top_answers(imgs, params):
     counts = {}
     for img in imgs:
-        ans = img['ans'] 
+        ans = img['ans']
         counts[ans] = counts.get(ans, 0) + 1
 
     cw = sorted([(count,w) for w,count in counts.iteritems()], reverse=True)
-    print 'top answer and their counts:'    
+    print 'top answer and their counts:'
     print '\n'.join(map(str,cw[:20]))
-    
+
     vocab = []
     for i in range(params['num_ans']):
         vocab.append(cw[i][1])
@@ -116,7 +119,7 @@ def encode_question(imgs, params, wtoi):
         for k,w in enumerate(img['final_question']):
             if k < max_length:
                 label_arrays[i,k] = wtoi[w]
-    
+
     return label_arrays, label_length, question_id
 
 
@@ -166,7 +169,7 @@ def get_unqiue_img(imgs):
             ques_pos_tmp[idx-1] = []
 
         ques_pos_tmp[idx-1].append(i+1)
-    
+
     img_N = len(ques_pos_tmp)
     ques_pos = np.zeros((img_N,3), dtype='uint32')
     ques_pos_len = np.zeros(img_N, dtype='uint32')
@@ -182,8 +185,8 @@ def main(params):
     imgs_train = json.load(open(params['input_train_json'], 'r'))
     imgs_test = json.load(open(params['input_test_json'], 'r'))
 
-    imgs_train = imgs_train[:5000]
-    imgs_test = imgs_test[:5000]
+    #imgs_train = imgs_train[:5000]
+    #imgs_test = imgs_test[:5000]
     # get top answers
     top_ans = get_top_answers(imgs_train, params)
     atoi = {w:i+1 for i,w in enumerate(top_ans)}
@@ -213,13 +216,20 @@ def main(params):
 
     # get the answer encoding.
     ans_train = encode_answer(imgs_train, atoi)
-    
+
     ans_test = encode_answer(imgs_test, atoi)
     MC_ans_test = encode_mc_answer(imgs_test, atoi)
 
     # get the split
     N_train = len(imgs_train)
     N_test = len(imgs_test)
+
+
+    print("N_train")
+    print(N_train)
+
+    print("N_test")
+    print(N_test)
     # since the train image is already suffled, we just use the last val_num image as validation
     # train = 0, val = 1, test = 2
     split_train = np.zeros(N_train)
@@ -235,7 +245,7 @@ def main(params):
 
     f.create_dataset("answers", dtype='uint32', data=ans_train)
     f.create_dataset("ans_test", dtype='uint32', data=ans_test)
-    
+
     f.create_dataset("ques_id_train", dtype='uint32', data=question_id_train)
     f.create_dataset("ques_id_test", dtype='uint32', data=question_id_test)
 
@@ -279,7 +289,7 @@ if __name__ == "__main__":
 
     parser.add_argument('--output_json', default='../data/vqa_data_prepro.json', help='output json file')
     parser.add_argument('--output_h5', default='../data/vqa_data_prepro.h5', help='output h5 file')
-  
+
     # options
     parser.add_argument('--max_length', default=26, type=int, help='max length of a caption, in number of words. captions longer than this get clipped.')
     parser.add_argument('--word_count_threshold', default=0, type=int, help='only words that occur more than this number of times will be put in vocab')
