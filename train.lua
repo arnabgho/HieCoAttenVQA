@@ -128,7 +128,7 @@ protos.word = nn.word_level(lmOpt)
 protos.phrase = nn.phrase_level(lmOpt)
 protos.ques = nn.ques_level(lmOpt)
 
-protos.atten = nn.recursive_atten()
+protos.atten = nn.recursive_atten(lmOpt)
 protos.crit = nn.CrossEntropyCriterion()
 -- ship everything to GPU, maybe
 

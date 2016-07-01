@@ -1,12 +1,12 @@
 require 'nn'
 local utils = require 'misc.utils'
-local attention = require 'misc.attention'
+local attention = require 'misc.attention_fact'
 
 local layer, parent = torch.class('nn.recursive_atten', 'nn.Module')
 function layer:__init(opt)
     parent.__init(self)
-    self.hidden_size=utils.getopt(opt, 'hidden_size')
-    self.atten_encode = attention.recursive_atten(self.hidden_size,512,1024,1000)
+
+    self.atten_encode = attention.recursive_atten(opt.hidden_size,512,1024,1000)
 
     -- self.atten_encode = attention.recursive_atten(512,512,512,1000) -- coco_qa
 end

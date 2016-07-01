@@ -7,24 +7,24 @@ require 'nn'
 local utils=require 'misc.utils'
 local LanguageEmbedding = require 'misc.LanguageEmbedding'
 
-local layer , parent= torch.class('nn.img_doc_encoding','nn.Module')
+local layer , parent= torch.class('nn.img_fact_encoding','nn.Module')
 
-function img_doc_encoding:__init( opt )
+function img_fact_encoding:__init( opt )
     parent.__init(self)
 
-    self.max_relations=utils.getopt(opt,'max_relations')
-    self.vocab_size = utils.getopt(opt, 'doc_vocab_size') -- required
-    self.image_doc_size=utils.getopt(opt,'image_doc_size') 
+self.max_relations=utils.getopt(opt,'max_relations')
+    self.vocab_size = utils.getopt(opt, 'vocab_size') -- required
+    self.image_doc_size=utils.getopt(opt,'hidden_size') 
     self.hidden_size = utils.getopt(opt, 'hidden_size')
     local dropout = utils.getopt(opt, 'dropout', 0)
     self.seq_length = utils.getopt(opt, 'seq_length')
     self.atten_type = utils.getopt(opt, 'atten_type')
     self.feature_type = utils.getopt(opt, 'feature_type')
-    --self.LE = LanguageEmbedding.LE(self.vocab_size, self.hidden_size, self.hidden_size, self.seq_length)    
-    self.LT=nn.LookupTable(self.vocab_size,self.hidden_size)
+    self.LE = LanguageEmbedding.LE(self.vocab_size, self.hidden_size, self.hidden_size, self.seq_length)    
+    --self.LT=nn.LookupTable(self.vocab_size,self.hidden_size)
 
     self.fact_encoder=nn.Sequential()
-    self.fact_encoder:add(self.LT)
+    self.fact_encoder:add(self.LE)
     self.fact_encoder.add(nn.SplitTable(1))
     self.fact_encoder:add(nn.Sequencer( nn.LSTM( self.hidden_size, self.hidden_size )  ))
     self.fact_encoder:add(nn.SelectTable(-1) )
@@ -37,14 +37,14 @@ function img_doc_encoding:__init( opt )
 end
 
 function layer:getModulesList()
-    return {self.LT, self.fact_encoder , self.doc_encoder}
+    return {self.LE, self.fact_encoder , self.doc_encoder}
 end
 
 
 function layer:parameters()
     local p1,g1=self.fact_encoder:getParameters()
     local p2,g2=self.doc_encoder:getParameters()
-    local p3,g3=self.LT:getParameters() -- Check Whether The Lookup Tables' parameters are to be included
+    local p3,g3=self.LE:getParameters() -- Check Whether The Lookup Tables' parameters are to be included
     
     local params = {}
     for k,v in pairs(p1) do table.insert(params, v) end
@@ -60,13 +60,13 @@ function layer:parameters()
 end
 
 function layer:training()
-    self.LT:training()
+    self.LE:training()
     self.fact_encoder:training()
     self.doc_encoder:training()
 end
 
 function layer:evaluate()
-    self.LT:evaluate()
+    self.LE:evaluate()
     self.fact_encoder:evaluate()
     self.doc_encoder:evaluate()
 end

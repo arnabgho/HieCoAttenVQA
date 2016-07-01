@@ -9,11 +9,13 @@
 require 'nn'
 require 'torch'
 require 'optim'
-require 'misc.DataLoaderDisk'
+require 'misc.DataLoaderDiskFact'
+require 'misc.'
 require 'misc.word_level'
 require 'misc.phrase_level'
 require 'misc.ques_level'
-require 'misc.recursive_atten'
+require 'misc.recursive_atten_fact'
+require 'misc.fact_encoding'
 require 'misc.optim_updates'
 local utils = require 'misc.utils'
 require 'xlua'
@@ -32,8 +34,8 @@ cmd:text('Options')
 -- Data input settings
 cmd:option('-input_img_train_h5','data/vqa_data_img_vgg_train.h5','path to the h5file containing the image feature')
 cmd:option('-input_img_test_h5','data/vqa_data_img_vgg_test.h5','path to the h5file containing the image feature')
-cmd:option('-input_ques_h5','data/vqa_data_prepro.h5','path to the h5file containing the preprocessed dataset')
-cmd:option('-input_json','data/vqa_data_prepro.json','path to the json file containing additional info and vocab')
+cmd:option('-input_ques_h5','data/vqa_fact_data_prepro.h5','path to the h5file containing the preprocessed dataset')
+cmd:option('-input_json','data/vqa_fact_data_prepro.json','path to the json file containing additional info and vocab')
 
 cmd:option('-start_from', '', 'path to a model checkpoint to initialize model weights from. Empty = don\'t')
 cmd:option('-co_atten_type', 'Alternating', 'co_attention type. Parallel or Alternating, alternating trains more faster than parallel.')
@@ -133,7 +135,7 @@ protos.phrase = nn.phrase_level(lmOpt)
 protos.ques = nn.ques_level(lmOpt)
 protos.img_fact_encoding=nn.img_fact_encoding(lmOpt)
 
-protos.atten = nn.recursive_atten()
+protos.atten = nn.recursive_atten(lmOpt)
 protos.crit = nn.CrossEntropyCriterion()
 
 -- ship everything to GPU, maybe
@@ -179,6 +181,10 @@ collectgarbage()
 -------------------------------------------------------------------------------
 -- Validation evaluation
 -------------------------------------------------------------------------------
+
+-------------------------------------------------
+-- See how to include the image fact encoding
+-------------------------------------------------
 local function eval_split(split)
 
   protos.word:evaluate()
@@ -202,7 +208,8 @@ local function eval_split(split)
       data.images = data.images:cuda()
       data.questions = data.questions:cuda()
       data.ques_len = data.ques_len:cuda()
-      data.img_fact=data.img_fact:cuda()
+      --data.img_fact=data.img_fact:cuda()
+      data.captions=data.captions:cuda()
     end
   n = n + data.images:size(1)
   xlua.progress(n, total_num)
@@ -216,7 +223,7 @@ local function eval_split(split)
 
   local q_ques, q_img = unpack(protos.ques:forward({conv_feat, data.ques_len, img_feat, mask}))
 
-  local feature_ensemble = {w_ques, w_img, p_ques, p_img, q_ques, q_img}
+  local feature_ensemble = {w_ques, w_img, p_ques, p_img, q_ques, q_img, img_fact_feat}
   local out_feat = protos.atten:forward(feature_ensemble)
 
   -- forward the language model criterion
@@ -267,7 +274,8 @@ local function lossFun()        -- The MVP , see what the individual functions a
     data.questions = data.questions:cuda()
     data.ques_len = data.ques_len:cuda()
     data.images = data.images:cuda()
-    data.img_fact=data.img_fact:cuda()
+    --data.img_fact=data.img_fact:cuda()
+    data.captions=data.captions:cuda()
   end
 
   local img_fact_feat=protos.img_fact_encoding:forward( { data.img_fact  }  )
@@ -280,7 +288,7 @@ local function lossFun()        -- The MVP , see what the individual functions a
 
   local q_ques, q_img = unpack(protos.ques:forward({conv_feat, data.ques_len, img_feat, mask}))
 
-  local feature_ensemble = {w_ques, w_img, p_ques, p_img, q_ques, q_img}
+  local feature_ensemble = {w_ques, w_img, p_ques, p_img, q_ques, q_img,img_fact_feat}
   local out_feat = protos.atten:forward(feature_ensemble)
   
   -- forward the language model criterion
@@ -291,7 +299,7 @@ local function lossFun()        -- The MVP , see what the individual functions a
   -- backprop criterion
   local dlogprobs = protos.crit:backward(out_feat, data.answer)
   
-  local d_w_ques, d_w_img, d_p_ques, d_p_img, d_q_ques, d_q_img = unpack(protos.atten:backward(feature_ensemble, dlogprobs))
+  local d_w_ques, d_w_img, d_p_ques, d_p_img, d_q_ques, d_q_img , d_img_fact_feat = unpack(protos.atten:backward(feature_ensemble, dlogprobs))
 
   local d_ques_feat, d_ques_img = unpack(protos.ques:backward({conv_feat, data.ques_len, img_feat}, {d_q_ques, d_q_img}))
     
@@ -300,6 +308,7 @@ local function lossFun()        -- The MVP , see what the individual functions a
   
   local dummy = protos.word:backward({data.questions, data.images}, {d_conv_feat, d_w_ques, d_w_img, d_conv_img, d_ques_img})
 
+  local dummy2=protos.img_fact_encoding:backward( { data.img_fact  } , { d_img_fact_feat   } )
   -- Check the modification that needs to be done to allow to backpropagate through image_fact_encoding
   --
   --
@@ -358,7 +367,7 @@ while true do
       local val_loss, val_accu = eval_split(2)
       print('validation loss: ', val_loss, 'accuracy ', val_accu)
 
-      local checkpoint_path = path.join(opt.checkpoint_path .. '_' .. opt.co_atten_type, 'model_id' .. opt.id .. '_iter'.. iter)
+      local checkpoint_path = path.join(opt.checkpoint_path .. '_fact_' .. opt.co_atten_type, 'model_id' .. opt.id .. '_iter'.. iter)
       torch.save(checkpoint_path..'.t7', {wparams=wparams, pparams = pparams, qparams=qparams, aparams=aparams, lmOpt=lmOpt}) 
 
       local checkpoint = {}
