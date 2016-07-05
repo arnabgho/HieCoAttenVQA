@@ -281,7 +281,6 @@ local function lossFun()        -- The MVP , see what the individual functions a
     data.captions=data.captions:cuda()
   end
 
-  local img_fact_feat=protos.img_fact_encoding:forward( { data.captions  }  )
 
 
   -- Check what all needs to be modified in these files to accommodate img_fact_feat
@@ -291,7 +290,10 @@ local function lossFun()        -- The MVP , see what the individual functions a
 
   local q_ques, q_img = unpack(protos.ques:forward({conv_feat, data.ques_len, img_feat, mask}))
 
+  local img_fact_feat=protos.img_fact_encoding:forward( { data.captions , w_ques  }  )
+  
   local feature_ensemble = {w_ques, w_img, p_ques, p_img, q_ques, q_img,img_fact_feat}
+
   local out_feat = protos.atten:forward(feature_ensemble)
   
   -- forward the language model criterion
@@ -311,7 +313,7 @@ local function lossFun()        -- The MVP , see what the individual functions a
   
   local dummy = protos.word:backward({data.questions, data.images}, {d_conv_feat, d_w_ques, d_w_img, d_conv_img, d_ques_img})
 
-  local dummy2=protos.img_fact_encoding:backward( { data.captions  } , { d_img_fact_feat   } )
+  local dummy2=protos.img_fact_encoding:backward( { data.captions, w_ques  } , { d_img_fact_feat   } )
   -- Check the modification that needs to be done to allow to backpropagate through image_fact_encoding
   --
   --

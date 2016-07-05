@@ -7,12 +7,11 @@ require 'nn'
 local utils=require 'misc.utils'
 local LanguageEmbedding = require 'misc.LanguageEmbedding'
 
-local layer , parent= torch.class('nn.img_fact_encoding','nn.Module')
+local layer , parent= torch.class('nn.img_fact_encoding_att','nn.Module')
 
-function img_fact_encoding:__init( opt )
+function layer:__init( opt )
     parent.__init(self)
-
-self.max_relations=utils.getopt(opt,'max_relations')
+    self.max_relations=utils.getopt(opt,'max_relations')
     self.vocab_size = utils.getopt(opt, 'vocab_size') -- required
     self.image_doc_size=utils.getopt(opt,'hidden_size') 
     self.hidden_size = utils.getopt(opt, 'hidden_size')
@@ -21,19 +20,23 @@ self.max_relations=utils.getopt(opt,'max_relations')
     self.atten_type = utils.getopt(opt, 'atten_type')
     self.feature_type = utils.getopt(opt, 'feature_type')
     self.LE = LanguageEmbedding.LE(self.vocab_size, self.hidden_size, self.hidden_size, self.seq_length)    
-    --self.LT=nn.LookupTable(self.vocab_size,self.hidden_size)
+    --self.LE=nn.LookupTable(self.vocab_size,self.hidden_size)
 
+    self.gpu=utils.getopt(opt,'gpu',true)
     self.fact_encoder=nn.Sequential()
     self.fact_encoder:add(self.LE)
-    self.fact_encoder.add(nn.SplitTable(1))
+    self.fact_encoder:add(nn.SplitTable(1,2))
     self.fact_encoder:add(nn.Sequencer( nn.LSTM( self.hidden_size, self.hidden_size )  ))
     self.fact_encoder:add(nn.SelectTable(-1) )
     
     -- doc_encoder : to convert the relationship encodings into a single encoding using an LSTM
+   -- self.doc_encoder=nn.Sequential()
+   -- self.doc_encoder:add(nn.SplitTable(1,2))
+   -- self.doc_encoder:add(nn.Sequencer(nn.LSTM( self.hidden_size , self.image_doc_size  )))
+   -- self.doc_encoder:add(nn.SelectTable(-1))
     self.doc_encoder=nn.Sequential()
-    self.doc_encoder:add(nn.SplitTable(1))
-    self.doc_encoder:add(nn.Sequencer(nn.LSTM( self.hidden_size , self.image_doc_size  )))
-    self.doc_encoder:add(nn.SelectTable(-1))
+    self.doc_encoder:add(nn.Linear(self.hidden_size,self.hidden_size) )
+
 end
 
 function layer:getModulesList()
@@ -42,9 +45,9 @@ end
 
 
 function layer:parameters()
-    local p1,g1=self.fact_encoder:getParameters()
-    local p2,g2=self.doc_encoder:getParameters()
-    local p3,g3=self.LE:getParameters() -- Check Whether The Lookup Tables' parameters are to be included
+    local p1,g1=self.fact_encoder:parameters()
+    local p2,g2=self.doc_encoder:parameters()
+    local p3,g3=self.LE:parameters() -- Check Whether The Lookup Tables' parameters are to be included
     
     local params = {}
     for k,v in pairs(p1) do table.insert(params, v) end
@@ -73,17 +76,41 @@ end
 
 function layer:updateOutput( input )
     local img_doc_relations=input[1]
+    local question_embedding=input[2]
+    
 
     local batch_size=img_doc_relations:size(1)
     --self.relation_embeddings={}
-    self.doc_encoder_input=torch.Tensor( batch_size, max_relations , self.hidden_size  ) 
-    for i =1,batch_size do
-        local fact_encoder_input=input[i]
+    local doc_encoder_input=torch.Tensor( batch_size, self.max_relations , self.hidden_size  ) 
+    local batch_doc_encoded=torch.Tensor(batch_size , self.hidden_size):zero()
+    local softmax_input=torch.Tensor(batch_size , self.max_relations)
+
+    if(self.gpu) then
+        doc_encoder_input=doc_encoder_input:cuda()
+        batch_doc_encoded=batch_doc_encoded:cuda()
+        softmax_input=softmax_input:cuda()
+    end
+    for i=1,batch_size do
+        local fact_encoder_input=img_doc_relations[i]
         local encoded_facts=self.fact_encoder:forward(fact_encoder_input)  --encoded_facts:size max_relations x self.hidden_size
-        local doc_encoder_input[i]=encoded_facts
+        doc_encoder_input[i]=encoded_facts
+    end
+    local transform_ques=self.doc_encoder:forward( question_embedding) --transform_ques : batch_size x self.hidden_size
+    for i=1,batch_size do
+        softmax_input[i]=doc_encoder_input[i]*transform_ques[i]
     end
 
-    local batch_doc_encoded=self.doc_encoder:forward(doc_encoder_input)
+    softmax_input=nn.SoftMax():forward(softmax_input)
+
+    for i=1,batch_size do
+        for j=1,self.max_relations do
+            batch_doc_encoded[i]=batch_doc_encoded[i] + softmax_input[i][j]*doc_encoder_input[i][j]
+        end
+    end
+   -- for i=1,batch_size do
+   --     local attention_input=doc_encoder_input[i]     --attention_input : max_relations x self.hidden_size
+   --     local softmax_input[i]=attention_input * transform_ques[i]:t()
+   -- end
     return batch_doc_encoded
 end
 
