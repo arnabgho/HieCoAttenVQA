@@ -16,6 +16,7 @@ require 'misc.ques_level'
 require 'misc.recursive_atten_fact'
 require 'misc.img_fact_encoding'
 require 'misc.optim_updates'
+cjson=require 'cjson'
 local utils = require 'misc.utils'
 require 'xlua'
 require 'os'
@@ -44,7 +45,7 @@ cmd:option('-feature_type', 'VGG', 'VGG or Residual')
 
 cmd:option('-hidden_size',512,'the hidden layer size of the model.')
 cmd:option('-rnn_size',512,'size of the rnn in number of hidden nodes in each layer')
-cmd:option('-batch_size',200,'what is theutils batch size in number of images per batch? (there will be x seq_per_img sentences)')
+cmd:option('-batch_size',20,'what is theutils batch size in number of images per batch? (there will be x seq_per_img sentences)')
 cmd:option('-output_size', 1000, 'number of output answers')
 cmd:option('-rnn_layers',2,'number of the rnn layer')
 
@@ -61,7 +62,7 @@ cmd:option('-max_iters', -1, 'max number of iterations to run for (-1 = run fore
 cmd:option('-iterPerEpoch', 1200)
 cmd:option('-max_relations',20)
 -- Evaluation/Checkpointing
-cmd:option('-save_checkpoint_every', 6000, 'how often to save a model checkpoint?')
+cmd:option('-save_checkpoint_every', 600, 'how often to save a model checkpoint?')
 cmd:option('-checkpoint_path', 'save/train_vgg_fact', 'folder to save checkpoints into (empty = this folder)')
 
 -- Visualization
@@ -110,12 +111,15 @@ local loader = DataLoader{h5_img_file_train = opt.input_img_train_h5, h5_img_fil
 local protos = {}
 print('Building the model...')
 -- intialize language model
+local iter = 0
 local loaded_checkpoint
 local lmOpt
 if string.len(opt.start_from) > 0 then
   local start_path = path.join(opt.checkpoint_path .. '_' .. opt.co_atten_type ,  opt.start_from)
   loaded_checkpoint = torch.load(start_path)
   lmOpt = loaded_checkpoint.lmOpt
+  str_iter= opt.start_from:match("model_id0_iter([^.]+).t7")
+  iter=tonumber(str_iter)
 else
   lmOpt = {}
   lmOpt.vocab_size = loader:getVocabSize()
@@ -158,7 +162,7 @@ if string.len(opt.start_from) > 0 then
   pparams:copy(loaded_checkpoint.pparams)
   qparams:copy(loaded_checkpoint.qparams)
   aparams:copy(loaded_checkpoint.aparams)
-  iparams:copy(loaded_checkpoint,iparams)
+  iparams:copy(loaded_checkpoint.iparams)
 end
 
 print('total number of parameters in word_level: ', wparams:nElement())
@@ -205,7 +209,17 @@ local function eval_split(split)
   local total_num=1000
   while true do
     local data = loader:getBatch{batch_size = opt.batch_size, split = split}
-    -- ship the data to cuda
+    local precision=1e-5
+   -- local jac = nn.Jacobian
+   -- local err=jac.testJacobian(protos.img_fact_encoding,data.captions)
+   -- print("====> error: "..err)
+   -- if err<precision then
+   --     print("============> module OK")
+   -- else
+   --     print("============> error too large incorrect implementation")
+   --   --  os.execute("sleep 1")
+   -- end
+   -- ship the data to cuda
     if opt.gpuid >= 0 then
       data.answer = data.answer:cuda()
       data.images = data.images:cuda()
@@ -217,8 +231,23 @@ local function eval_split(split)
   n = n + data.images:size(1)
   xlua.progress(n, total_num)
   
-  local img_fact_feat=protos.img_fact_encoding:forward( { data.captions  }  )
 
+  --local img_fact_feat=protos.img_fact_encoding:forward( { data.captions}  )
+  -- Check Gradient Computation with Jacobian
+--  local precision=1e-5
+--  local jac = nn.Jacobian
+--  local err=jac.testJacobian(protos.img_fact_encoding,data.captions)
+--  print("====> error: "..err)
+--  if err<precision then
+--      print("============> module OK")
+--  else
+--      print("============> error too large incorrect implementation")
+--      os.execute("sleep 1")
+--  end
+  --------------------------------------------
+
+
+  local img_fact_feat=protos.img_fact_encoding:forward( { data.captions }  )
   -- Check what all needs to be added here to accommodate the img_fact_feat
   local word_feat, img_feat, w_ques, w_img, mask = unpack(protos.word:forward({data.questions, data.images}))
 
@@ -253,7 +282,6 @@ end
 -------------------------------------------------------------------------------
 -- Loss function
 -------------------------------------------------------------------------------
-local iter = 0
 local function lossFun()        -- The MVP , see what the individual functions are doing 
   protos.word:training()
   grad_wparams:zero()  
@@ -267,6 +295,8 @@ local function lossFun()        -- The MVP , see what the individual functions a
   protos.atten:training()
   grad_aparams:zero()
 
+  protos.img_fact_encoding:training()
+  grad_iparams:zero()
   ----------------------------------------------------------------------------
   -- Forward pass
   -----------------------------------------------------------------------------
@@ -281,8 +311,9 @@ local function lossFun()        -- The MVP , see what the individual functions a
     data.captions=data.captions:cuda()
   end
 
-  local img_fact_feat=protos.img_fact_encoding:forward( { data.captions  }  )
+  --local img_fact_feat=protos.img_fact_encoding:forward( { data.captions  }  )
 
+  local img_fact_feat=protos.img_fact_encoding:forward( {data.captions} )
 
   -- Check what all needs to be modified in these files to accommodate img_fact_feat
   local word_feat, img_feat, w_ques, w_img, mask = unpack(protos.word:forward({data.questions, data.images}))
@@ -311,7 +342,8 @@ local function lossFun()        -- The MVP , see what the individual functions a
   
   local dummy = protos.word:backward({data.questions, data.images}, {d_conv_feat, d_w_ques, d_w_img, d_conv_img, d_ques_img})
 
-  local dummy2=protos.img_fact_encoding:backward( { data.captions  } , { d_img_fact_feat   } )
+  local dummy2=protos.img_fact_encoding:backward( {data.captions} , { d_img_fact_feat   } )
+  --print(d_img_fact_feat.modules[1].gradInput)
   -- Check the modification that needs to be done to allow to backpropagate through image_fact_encoding
   --
   --
@@ -382,10 +414,11 @@ while true do
       checkpoint.accuracy_history = accuracy_history
       checkpoint.learning_rate_history = learning_rate_history
 
-      local checkpoint_path = path.join(opt.checkpoint_path .. '_' .. opt.co_atten_type, 'checkpoint' .. '.json')
+      print(checkpoint)
 
-      utils.write_json(checkpoint_path, checkpoint)
-      print('wrote json checkpoint to ' .. checkpoint_path .. '.json')
+      local checkpoint_path = path.join(opt.checkpoint_path .. '_' .. opt.co_atten_type, 'checkpoint' .. '.json')
+      --utils.write_json(checkpoint_path, checkpoint)
+      --print('wrote json checkpoint to ' .. checkpoint_path .. '.json')
 
   end
 

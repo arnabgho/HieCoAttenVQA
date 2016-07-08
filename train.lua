@@ -104,12 +104,15 @@ local loader = DataLoader{h5_img_file_train = opt.input_img_train_h5, h5_img_fil
 local protos = {}
 print('Building the model...')
 -- intialize language model
+local iter=0
 local loaded_checkpoint
 local lmOpt
 if string.len(opt.start_from) > 0 then
   local start_path = path.join(opt.checkpoint_path .. '_' .. opt.co_atten_type ,  opt.start_from)
   loaded_checkpoint = torch.load(start_path)
   lmOpt = loaded_checkpoint.lmOpt
+  str_iter= opt.start_from:match("model_id0_iter([^.]+).t7")
+  iter=tonumber(str_iter)
 else
   lmOpt = {}
   lmOpt.vocab_size = loader:getVocabSize()
@@ -182,6 +185,7 @@ local function eval_split(split)
   local right_sum = 0
   local predictions = {}
   local total_num = loader:getDataNum(split)
+  total_num=1000
   while true do
     local data = loader:getBatch{batch_size = opt.batch_size, split = split}
     -- ship the data to cuda
@@ -227,7 +231,7 @@ end
 -------------------------------------------------------------------------------
 -- Loss function
 -------------------------------------------------------------------------------
-local iter = 0
+--local iter = 0
 local function lossFun()
   protos.word:training()
   grad_wparams:zero()  

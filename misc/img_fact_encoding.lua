@@ -13,6 +13,7 @@ function layer:__init( opt )
     parent.__init(self)
     self.max_relations=utils.getopt(opt,'max_relations')
     self.vocab_size = utils.getopt(opt, 'vocab_size') -- required
+    --opt.hidden_size=1       -- Just for testing
     self.image_doc_size=utils.getopt(opt,'hidden_size') 
     self.hidden_size = utils.getopt(opt, 'hidden_size')
     local dropout = utils.getopt(opt, 'dropout', 0)
@@ -38,6 +39,7 @@ end
 
 function layer:getModulesList()
     return {self.LE, self.fact_encoder , self.doc_encoder}
+    --return {self.fact_encoder , self.doc_encoder}
 end
 
 
@@ -72,30 +74,37 @@ function layer:evaluate()
 end
 
 function layer:updateOutput( input )
-    local img_doc_relations=input[1]
-
-    local batch_size=img_doc_relations:size(1)
+    --local img_doc_relations=input[1]
+    --local img_doc_relations=input[1]          
+    local batch_size=input[1]:size(1)
     --self.relation_embeddings={}
-    self.doc_encoder_input=torch.Tensor( batch_size, self.max_relations , self.hidden_size  ) 
-    if(self.gpu) then
-        self.doc_encoder_input=self.doc_encoder_input:cuda()
-    end
-    for i =1,batch_size do
-        local fact_encoder_input=img_doc_relations[i]
-        local encoded_facts=self.fact_encoder:forward(fact_encoder_input)  --encoded_facts:size max_relations x self.hidden_size
-        self.doc_encoder_input[i]=encoded_facts
-    end
-
-    local batch_doc_encoded=self.doc_encoder:forward(self.doc_encoder_input)
-    return batch_doc_encoded
+    --self.doc_encoder_input=torch.Tensor( batch_size, self.max_relations , self.hidden_size  ) 
+    --if(self.gpu) then
+    --    self.doc_encoder_input=self.doc_encoder_input:cuda()
+    --end
+   -- for i =1,batch_size do
+   --     --local fact_encoder_input=img_doc_relations[i]
+   --     local encoded_facts=self.fact_encoder:forward(img_doc_relations[i])  --encoded_facts:size max_relations x self.hidden_size
+   --     self.doc_encoder_input[i]=encoded_facts
+   -- end
+    input[1]=input[1]:reshape(batch_size * self.max_relations,self.seq_length)
+    self.doc_encoder_input=self.fact_encoder:forward(input[1]):reshape(batch_size , self.max_relations , self.hidden_size)
+    return self.doc_encoder:forward(self.doc_encoder_input)
 end
 
+
+
 -- This Function Need Not Be Computed Right Now since the computation doc will help and do it automatically 
---function layer:updateGradInput( input , gradOutput  )
---    local img_doc_relations=input[1]
---    local batch_size=img_doc_relations:size(1)
---
---    local d_
---    
---end
+function layer:updateGradInput( input , gradOutput  )
+    -- gradOutput : batch_size x hidden_size
+    --local img_doc_relations=input[1]
+    local batch_size=input[1]:size(1)
+
+    local d_doc_encoder_input=self.doc_encoder:backward( self.doc_encoder_input , gradOutput )
+    -- d_doc_encoder_input : batch_size x max_relations x hidden_size
+    d_doc_encoder_input=d_doc_encoder_input:reshape(batch_size * self.max_relations , self.hidden_size)
+    input[1]=input[1]:reshape(batch_size*self.max_relations,self.seq_length)
+
+    return self.fact_encoder:backward( input[1] , d_doc_encoder_input ):reshape(batch_size,self.max_relations,self.seq_length)
+end
 
