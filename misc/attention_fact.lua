@@ -225,22 +225,22 @@ function attention.recursive_atten(input_size, embedding_size, last_embed_size, 
 
 
 
-    local temp_embed_ques = inputs[1]
-    local temp_embed_img = inputs[2]
-    local temp_conv_ques = inputs[3]
-    local temp_conv_img = inputs[4]
-    local temp_lstm_ques = inputs[5]
-    local temp_lstm_img = inputs[6]
+    local embed_ques = inputs[1]
+    local embed_img = inputs[2]
+    local conv_ques = inputs[3]
+    local conv_img = inputs[4]
+    local lstm_ques = inputs[5]
+    local lstm_img = inputs[6]
     local fact=inputs[7]
 
     local fact_size=input_size
 
-    local embed_ques = nn.Tanh()(nn.Linear(input_size + fact_size ,input_size)(nn.JoinTable(2)({temp_embed_ques,fact} ))) 
-    local embed_img  = nn.Tanh()(nn.Linear(input_size + fact_size ,input_size)(nn.JoinTable(2)({temp_embed_img,fact} ))) 
-    local conv_ques  = nn.Tanh()(nn.Linear(input_size + fact_size ,input_size)(nn.JoinTable(2)({temp_conv_ques,fact} ))) 
-    local conv_img   = nn.Tanh()(nn.Linear(input_size + fact_size ,input_size)(nn.JoinTable(2)({temp_conv_img,fact}))) 
-    local lstm_ques  = nn.Tanh()(nn.Linear(input_size + fact_size ,input_size)(nn.JoinTable(2)({temp_lstm_ques,fact} ))) 
-    local lstm_img   = nn.Tanh()(nn.Linear(input_size + fact_size ,input_size)(nn.JoinTable(2)({temp_lstm_img,fact}))) 
+    --local embed_ques = nn.Tanh()(nn.Linear(input_size + fact_size ,input_size)(nn.JoinTable(2)({temp_embed_ques,fact} ))) 
+    --local embed_img  = nn.Tanh()(nn.Linear(input_size + fact_size ,input_size)(nn.JoinTable(2)({temp_embed_img,fact} ))) 
+    --local conv_ques  = nn.Tanh()(nn.Linear(input_size + fact_size ,input_size)(nn.JoinTable(2)({temp_conv_ques,fact} ))) 
+    --local conv_img   = nn.Tanh()(nn.Linear(input_size + fact_size ,input_size)(nn.JoinTable(2)({temp_conv_img,fact}))) 
+    --local lstm_ques  = nn.Tanh()(nn.Linear(input_size + fact_size ,input_size)(nn.JoinTable(2)({temp_lstm_ques,fact} ))) 
+    --local lstm_img   = nn.Tanh()(nn.Linear(input_size + fact_size ,input_size)(nn.JoinTable(2)({temp_lstm_img,fact}))) 
  
   
     local feat1 = nn.Dropout(0.5)(nn.CAddTable()({embed_ques, embed_img}))
@@ -249,7 +249,8 @@ function attention.recursive_atten(input_size, embedding_size, last_embed_size, 
     local hidden2 = nn.Tanh()(nn.Linear(embedding_size+input_size, embedding_size)(feat2))
     local feat3 = nn.Dropout(0.5)(nn.JoinTable(2)({nn.CAddTable()({lstm_ques, lstm_img}), hidden2}))
     local hidden3 = nn.Tanh()(nn.Linear(embedding_size+input_size, last_embed_size)(feat3))
-    local outfeat = nn.Linear(last_embed_size, output_size)(nn.Dropout(0.5)(hidden3))
+    local fact_hidden3=  nn.Tanh()(nn.Linear(last_embed_size + fact_size ,last_embed_size)(nn.JoinTable(2)({hidden3,fact}))) 
+    local outfeat = nn.Linear(last_embed_size, output_size)(nn.Dropout(0.5)(fact_hidden3))
 
     table.insert(outputs, outfeat)
 

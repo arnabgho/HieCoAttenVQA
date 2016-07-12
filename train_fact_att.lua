@@ -14,7 +14,7 @@ require 'misc.word_level'
 require 'misc.phrase_level'
 require 'misc.ques_level'
 require 'misc.recursive_atten_fact'
-require 'misc.img_fact_encoding'
+require 'misc.img_fact_encoding_att'
 require 'misc.optim_updates'
 local utils = require 'misc.utils'
 require 'xlua'
@@ -38,13 +38,13 @@ cmd:option('-input_ques_h5','data/vqa_fact_data_prepro.h5','path to the h5file c
 cmd:option('-input_json','data/vqa_fact_data_prepro.json','path to the json file containing additional info and vocab')
 
 cmd:option('-start_from', '', 'path to a model checkpoint to initialize model weights from. Empty = don\'t')
-cmd:option('-co_atten_type', 'Parallel', 'co_attention type. Parallel or Alternating, alternating trains more faster than parallel.')
+cmd:option('-co_atten_type', 'Alternating', 'co_attention type. Parallel or Alternating, alternating trains more faster than parallel.')
 cmd:option('-feature_type', 'VGG', 'VGG or Residual')
 
 
 cmd:option('-hidden_size',512,'the hidden layer size of the model.')
 cmd:option('-rnn_size',512,'size of the rnn in number of hidden nodes in each layer')
-cmd:option('-batch_size',200,'what is theutils batch size in number of images per batch? (there will be x seq_per_img sentences)')
+cmd:option('-batch_size',20,'what is theutils batch size in number of images per batch? (there will be x seq_per_img sentences)')
 cmd:option('-output_size', 1000, 'number of output answers')
 cmd:option('-rnn_layers',2,'number of the rnn layer')
 
@@ -112,10 +112,14 @@ print('Building the model...')
 -- intialize language model
 local loaded_checkpoint
 local lmOpt
+local iter=0
+local learning_rate=opt.learning_rate
 if string.len(opt.start_from) > 0 then
   local start_path = path.join(opt.checkpoint_path .. '_' .. opt.co_atten_type ,  opt.start_from)
   loaded_checkpoint = torch.load(start_path)
   lmOpt = loaded_checkpoint.lmOpt
+  str_iter= opt.start_from:match("model_id0_iter([^.]+).t7")
+  iter=tonumber(str_iter)
 else
   lmOpt = {}
   lmOpt.vocab_size = loader:getVocabSize()
@@ -135,7 +139,7 @@ end
 protos.word = nn.word_level(lmOpt)
 protos.phrase = nn.phrase_level(lmOpt)
 protos.ques = nn.ques_level(lmOpt)
-protos.img_fact_encoding=nn.img_fact_encoding(lmOpt)
+protos.img_fact_encoding=nn.img_fact_encoding_att(lmOpt)
 
 protos.atten = nn.recursive_atten(lmOpt)
 protos.crit = nn.CrossEntropyCriterion()
@@ -158,7 +162,8 @@ if string.len(opt.start_from) > 0 then
   pparams:copy(loaded_checkpoint.pparams)
   qparams:copy(loaded_checkpoint.qparams)
   aparams:copy(loaded_checkpoint.aparams)
-  iparams:copy(loaded_checkpoint,iparams)
+  iparams:copy(loaded_checkpoint.iparams)
+  learning_rate=loaded_checkpoint.learning_rate
 end
 
 print('total number of parameters in word_level: ', wparams:nElement())
@@ -217,7 +222,6 @@ local function eval_split(split)
   n = n + data.images:size(1)
   xlua.progress(n, total_num)
   
-  local img_fact_feat=protos.img_fact_encoding:forward( { data.captions  }  )
 
   -- Check what all needs to be added here to accommodate the img_fact_feat
   local word_feat, img_feat, w_ques, w_img, mask = unpack(protos.word:forward({data.questions, data.images}))
@@ -226,9 +230,12 @@ local function eval_split(split)
 
   local q_ques, q_img = unpack(protos.ques:forward({conv_feat, data.ques_len, img_feat, mask}))
 
+  local img_fact_feat=protos.img_fact_encoding:forward( { data.captions , w_ques  }  )
+  
   local feature_ensemble = {w_ques, w_img, p_ques, p_img, q_ques, q_img, img_fact_feat}
   local out_feat = protos.atten:forward(feature_ensemble)
 
+  collectgarbage()
   -- forward the language model criterion
   local loss = protos.crit:forward(out_feat, data.answer)
 
@@ -266,6 +273,9 @@ local function lossFun()        -- The MVP , see what the individual functions a
 
   protos.atten:training()
   grad_aparams:zero()
+
+  protos.img_fact_encoding:training()
+  grad_iparams:zero()
 
   ----------------------------------------------------------------------------
   -- Forward pass
@@ -314,7 +324,8 @@ local function lossFun()        -- The MVP , see what the individual functions a
   local dummy = protos.word:backward({data.questions, data.images}, {d_conv_feat, d_w_ques, d_w_img, d_conv_img, d_ques_img})
 
   local dummy2=protos.img_fact_encoding:backward( { data.captions, w_ques  } , { d_img_fact_feat   } )
-  -- Check the modification that needs to be done to allow to backpropagate through image_fact_encoding
+ -- Check the modification that needs to be done to allow to backpropagate through image_fact_encoding
+  -- 
   --
   --
   -----------------------------------------------------------------------------
@@ -375,7 +386,7 @@ while true do
       print('validation loss: ', val_loss, 'accuracy ', val_accu)
 
       local checkpoint_path = path.join(opt.checkpoint_path .. '_' .. opt.co_atten_type, 'model_id' .. opt.id .. '_iter'.. iter)
-      torch.save(checkpoint_path..'.t7', {wparams=wparams, pparams = pparams, qparams=qparams, aparams=aparams, iparams=iparams , lmOpt=lmOpt}) 
+      torch.save(checkpoint_path..'.t7', {learning_rate=learning_rate,wparams=wparams, pparams = pparams, qparams=qparams, aparams=aparams, iparams=iparams , lmOpt=lmOpt}) 
 
       local checkpoint = {}
       checkpoint.opt = opt
@@ -386,8 +397,8 @@ while true do
 
       local checkpoint_path = path.join(opt.checkpoint_path .. '_' .. opt.co_atten_type, 'checkpoint' .. '.json')
 
-      utils.write_json(checkpoint_path, checkpoint)
-      print('wrote json checkpoint to ' .. checkpoint_path .. '.json')
+      --utils.write_json(checkpoint_path, checkpoint)
+      --print('wrote json checkpoint to ' .. checkpoint_path .. '.json')
 
   end
 
@@ -406,6 +417,5 @@ while true do
 
   iter = iter + 1
   if opt.max_iters > 0 and iter >= opt.max_iters then break end -- stopping criterion
-  print("iter")
-  print(iter)
+  xlua.progress(iter, (tonumber(math.floor(iter/opt.save_checkpoint_every) )+1)*opt.save_checkpoint_every )
 end

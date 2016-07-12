@@ -39,7 +39,7 @@ cmd:option('-input_ques_h5','data/vqa_fact_data_prepro.h5','path to the h5file c
 cmd:option('-input_json','data/vqa_fact_data_prepro.json','path to the json file containing additional info and vocab')
 
 cmd:option('-start_from', '', 'path to a model checkpoint to initialize model weights from. Empty = don\'t')
-cmd:option('-co_atten_type', 'Parallel', 'co_attention type. Parallel or Alternating, alternating trains more faster than parallel.')
+cmd:option('-co_atten_type', 'Alternating', 'co_attention type. Parallel or Alternating, alternating trains more faster than parallel.')
 cmd:option('-feature_type', 'VGG', 'VGG or Residual')
 
 
@@ -62,7 +62,7 @@ cmd:option('-max_iters', -1, 'max number of iterations to run for (-1 = run fore
 cmd:option('-iterPerEpoch', 1200)
 cmd:option('-max_relations',20)
 -- Evaluation/Checkpointing
-cmd:option('-save_checkpoint_every', 600, 'how often to save a model checkpoint?')
+cmd:option('-save_checkpoint_every', 6000, 'how often to save a model checkpoint?')
 cmd:option('-checkpoint_path', 'save/train_vgg_fact', 'folder to save checkpoints into (empty = this folder)')
 
 -- Visualization
@@ -114,6 +114,7 @@ print('Building the model...')
 local iter = 0
 local loaded_checkpoint
 local lmOpt
+local learning_rate = opt.learning_rate
 if string.len(opt.start_from) > 0 then
   local start_path = path.join(opt.checkpoint_path .. '_' .. opt.co_atten_type ,  opt.start_from)
   loaded_checkpoint = torch.load(start_path)
@@ -163,6 +164,7 @@ if string.len(opt.start_from) > 0 then
   qparams:copy(loaded_checkpoint.qparams)
   aparams:copy(loaded_checkpoint.aparams)
   iparams:copy(loaded_checkpoint.iparams)
+  learning_rate=loaded_checkpoint.learning_rate
 end
 
 print('total number of parameters in word_level: ', wparams:nElement())
@@ -325,6 +327,7 @@ local function lossFun()        -- The MVP , see what the individual functions a
   local feature_ensemble = {w_ques, w_img, p_ques, p_img, q_ques, q_img,img_fact_feat}
   local out_feat = protos.atten:forward(feature_ensemble)
   
+  collectgarbage()
   -- forward the language model criterion
   local loss = protos.crit:forward(out_feat, data.answer)
   -----------------------------------------------------------------------------
@@ -343,7 +346,12 @@ local function lossFun()        -- The MVP , see what the individual functions a
   local dummy = protos.word:backward({data.questions, data.images}, {d_conv_feat, d_w_ques, d_w_img, d_conv_img, d_ques_img})
 
   local dummy2=protos.img_fact_encoding:backward( {data.captions} , { d_img_fact_feat   } )
-  --print(d_img_fact_feat.modules[1].gradInput)
+  collectgarbage() 
+--  print("sum of grad_iparams")
+--  print(torch.sum(grad_iparams))
+--  print("sum of grad_aparams")
+--  print(torch.sum(grad_aparams))
+ --print(d_img_fact_feat.modules[1].gradInput)
   -- Check the modification that needs to be done to allow to backpropagate through image_fact_encoding
   --
   --
@@ -373,7 +381,6 @@ local best_val_loss = 10000
 local ave_loss = 0
 local timer = torch.Timer()
 local decay_factor = math.exp(math.log(0.1)/opt.learning_rate_decay_every/opt.iterPerEpoch)
-local learning_rate = opt.learning_rate
 -- create the path to save the model.
 paths.mkdir(opt.checkpoint_path .. '_' .. opt.co_atten_type)
 --os.execute('mkdir -p '..sys.dirname(opt.checkpoint_path .. '_' .. opt.co_atten_type))
@@ -405,7 +412,7 @@ while true do
       print('validation loss: ', val_loss, 'accuracy ', val_accu)
 
       local checkpoint_path = path.join(opt.checkpoint_path .. '_' .. opt.co_atten_type, 'model_id' .. opt.id .. '_iter'.. iter)
-      torch.save(checkpoint_path..'.t7', {wparams=wparams, pparams = pparams, qparams=qparams, aparams=aparams, iparams=iparams , lmOpt=lmOpt}) 
+      torch.save(checkpoint_path..'.t7', {learning_rate=learning_rate,wparams=wparams, pparams = pparams, qparams=qparams, aparams=aparams, iparams=iparams , lmOpt=lmOpt}) 
 
       local checkpoint = {}
       checkpoint.opt = opt
@@ -414,7 +421,6 @@ while true do
       checkpoint.accuracy_history = accuracy_history
       checkpoint.learning_rate_history = learning_rate_history
 
-      print(checkpoint)
 
       local checkpoint_path = path.join(opt.checkpoint_path .. '_' .. opt.co_atten_type, 'checkpoint' .. '.json')
       --utils.write_json(checkpoint_path, checkpoint)
@@ -436,7 +442,6 @@ while true do
   end
 
   iter = iter + 1
+  xlua.progress(iter, (tonumber(math.floor(iter/opt.save_checkpoint_every) )+1)*opt.save_checkpoint_every )
   if opt.max_iters > 0 and iter >= opt.max_iters then break end -- stopping criterion
-  print("iter")
-  print(iter)
 end

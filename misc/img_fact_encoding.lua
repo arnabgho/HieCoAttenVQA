@@ -27,7 +27,7 @@ function layer:__init( opt )
     self.fact_encoder=nn.Sequential()
     self.fact_encoder:add(self.LE)
     self.fact_encoder:add(nn.SplitTable(1,2))
-    self.fact_encoder:add(nn.Sequencer( nn.LSTM( self.hidden_size, self.hidden_size )  ))
+    self.fact_encoder:add(nn.Sequencer(nn.LSTM( self.hidden_size, self.hidden_size )  ))
     self.fact_encoder:add(nn.SelectTable(-1) )
     
     -- doc_encoder : to convert the relationship encodings into a single encoding using an LSTM
@@ -89,6 +89,8 @@ function layer:updateOutput( input )
    -- end
     input[1]=input[1]:reshape(batch_size * self.max_relations,self.seq_length)
     self.doc_encoder_input=self.fact_encoder:forward(input[1]):reshape(batch_size , self.max_relations , self.hidden_size)
+    print("self.doc_encoder_input:sum()")
+    print(self.doc_encoder_input:sum())
     return self.doc_encoder:forward(self.doc_encoder_input)
 end
 
@@ -105,6 +107,9 @@ function layer:updateGradInput( input , gradOutput  )
     d_doc_encoder_input=d_doc_encoder_input:reshape(batch_size * self.max_relations , self.hidden_size)
     input[1]=input[1]:reshape(batch_size*self.max_relations,self.seq_length)
 
+    --local mask=input[1]:eq(0)
+    --mask=1-mask
+    --d_doc_encoder_input=d_doc_encoder_input:cmul(mask)
     return self.fact_encoder:backward( input[1] , d_doc_encoder_input ):reshape(batch_size,self.max_relations,self.seq_length)
 end
 
