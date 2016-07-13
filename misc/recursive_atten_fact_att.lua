@@ -1,6 +1,6 @@
 require 'nn'
 local utils = require 'misc.utils'
-local attention = require 'misc.attention_fact'
+local attention = require 'misc.attention_fact_att'
 
 local layer, parent = torch.class('nn.recursive_atten', 'nn.Module')
 function layer:__init(opt)
