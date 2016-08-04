@@ -19,7 +19,7 @@ require 'misc.optim_updates'
 local utils = require 'misc.utils'
 require 'xlua'
 require 'os'
-
+local json=require 'cjson'
 -------------------------------------------------------------------------------
 -- Input arguments and options
 -------------------------------------------------------------------------------
@@ -37,7 +37,7 @@ cmd:option('-input_img_test_h5','data/vqa_data_img_vgg_test.h5','path to the h5f
 cmd:option('-input_ques_h5','data/vqa_fact_data_prepro.h5','path to the h5file containing the preprocessed dataset')
 cmd:option('-input_json','data/vqa_fact_data_prepro.json','path to the json file containing additional info and vocab')
 
-cmd:option('-start_from', '', 'path to a model checkpoint to initialize model weights from. Empty = don\'t')
+cmd:option('-start_from', 'model_id0_iter240000.t7', 'path to a model checkpoint to initialize model weights from. Empty = don\'t')
 cmd:option('-co_atten_type', 'Alternating', 'co_attention type. Parallel or Alternating, alternating trains more faster than parallel.')
 cmd:option('-feature_type', 'VGG', 'VGG or Residual')
 
@@ -63,10 +63,11 @@ cmd:option('-max_relations',20)
 -- Evaluation/Checkpointing
 cmd:option('-save_checkpoint_every', 6000, 'how often to save a model checkpoint?')
 cmd:option('-checkpoint_path', 'save/train_vgg_fact_att', 'folder to save checkpoints into (empty = this folder)')
+cmd:option('-load_path', 'save/train_vgg_fact_att_Alternating_w_ques', 'folder to save checkpoints into (empty = this folder)')
 
 -- Visualization
 cmd:option('-losses_log_every', 600, 'How often do we save losses, for inclusion in the progress dump? (0 = disable)')
-
+cmd:option('-num_batches','5','Number of batches to be visualized')
 
 -- Add the parameters for the image_fact features such as image_fact_size etc and the maximum number of relations
 
@@ -84,7 +85,7 @@ cmd:text()
 -------------------------------------------------------------------------------
 local opt = cmd:parse(arg)
 torch.manualSeed(opt.seed)
-print(opt)
+--print(opt)
 torch.setdefaulttensortype('torch.FloatTensor') -- for CPU
 
 if opt.gpuid >= 0 then
@@ -115,7 +116,7 @@ local lmOpt
 local iter=0
 local learning_rate=opt.learning_rate
 if string.len(opt.start_from) > 0 then
-  local start_path = path.join(opt.checkpoint_path .. '_' .. opt.co_atten_type ,  opt.start_from)
+  local start_path = path.join(opt.load_path ,  opt.start_from)
   loaded_checkpoint = torch.load(start_path)
   lmOpt = loaded_checkpoint.lmOpt
   str_iter= opt.start_from:match("model_id0_iter([^.]+).t7")
@@ -139,12 +140,12 @@ end
 protos.word = nn.word_level(lmOpt)
 protos.phrase = nn.phrase_level(lmOpt)
 protos.ques = nn.ques_level(lmOpt)
---protos.img_fact_encoding_w=nn.img_fact_encoding_att(lmOpt)
---
+protos.img_fact_encoding_w=nn.img_fact_encoding_att(lmOpt)
+
 --protos.img_fact_encoding_p=nn.img_fact_encoding_att(lmOpt)
 
 
-protos.img_fact_encoding_q=nn.img_fact_encoding_att(lmOpt)
+--protos.img_fact_encoding_q=nn.img_fact_encoding_att(lmOpt)
 protos.atten = nn.recursive_atten(lmOpt)
 protos.crit = nn.CrossEntropyCriterion()
 
@@ -158,9 +159,9 @@ local wparams, grad_wparams = protos.word:getParameters()
 local pparams, grad_pparams = protos.phrase:getParameters()
 local qparams, grad_qparams = protos.ques:getParameters()
 local aparams, grad_aparams = protos.atten:getParameters()
---local iwparams, grad_iwparams = protos.img_fact_encoding_w:getParameters()
+local iwparams, grad_iwparams = protos.img_fact_encoding_w:getParameters()
 --local ipparams, grad_ipparams = protos.img_fact_encoding_p:getParameters()
-local iqparams, grad_iqparams = protos.img_fact_encoding_q:getParameters()
+--local iqparams, grad_iqparams = protos.img_fact_encoding_q:getParameters()
 
 if string.len(opt.start_from) > 0 then
   print('Load the weight...')
@@ -168,9 +169,10 @@ if string.len(opt.start_from) > 0 then
   pparams:copy(loaded_checkpoint.pparams)
   qparams:copy(loaded_checkpoint.qparams)
   aparams:copy(loaded_checkpoint.aparams)
+  iwparams:copy(loaded_checkpoint.iparams)
 --  iwparams:copy(loaded_checkpoint.iwparams)
 --  ipparams:copy(loaded_checkpoint.ipparams) 
-  iqparams:copy(loaded_checkpoint.iqparams)
+--  iqparams:copy(loaded_checkpoint.iqparams)
   learning_rate=loaded_checkpoint.learning_rate
 end
 
@@ -187,14 +189,14 @@ protos.ques:shareClones()
 print('total number of parameters in recursive_attention: ', aparams:nElement())
 assert(aparams:nElement() == grad_aparams:nElement())
 
---print('total number of parameters in img_fact_encoding w: ', iwparams:nElement())
---assert(iwparams:nElement() == grad_iwparams:nElement())
---
+print('total number of parameters in img_fact_encoding w: ', iwparams:nElement())
+assert(iwparams:nElement() == grad_iwparams:nElement())
+
 --print('total number of parameters in img_fact_encoding p: ', ipparams:nElement())
 --assert(ipparams:nElement() == grad_ipparams:nElement())
-
-print('total number of parameters in img_fact_encoding q: ', iqparams:nElement())
-assert(iqparams:nElement() == grad_iqparams:nElement())
+--
+--print('total number of parameters in img_fact_encoding q: ', iqparams:nElement())
+--assert(iqparams:nElement() == grad_iqparams:nElement())
 
 
 collectgarbage() 
@@ -212,9 +214,9 @@ local function eval_split(split)
   protos.phrase:evaluate()
   protos.ques:evaluate()
   protos.atten:evaluate()
---  protos.img_fact_encoding_w:evaluate()
---  protos.img_fact_encoding_p:evaluate()
-  protos.img_fact_encoding_q:evaluate()
+  protos.img_fact_encoding_w:evaluate()
+  --protos.img_fact_encoding_p:evaluate()
+  --protos.img_fact_encoding_q:evaluate()
   loader:resetIterator(split)
 
   local n = 0
@@ -223,7 +225,7 @@ local function eval_split(split)
   local right_sum = 0
   local predictions = {}
   local total_num = loader:getDataNum(split)
-  local total_num=1000
+  local total_num=opt.num_batches*opt.batch_size
   while true do
     local data = loader:getBatch{batch_size = opt.batch_size, split = split}
     -- ship the data to cuda
@@ -236,8 +238,14 @@ local function eval_split(split)
       data.captions=data.captions:cuda()
     end
   n = n + data.images:size(1)
-  xlua.progress(n, total_num)
+  --xlua.progress(n, total_num)
   
+
+  input_json_file=io.open(opt.input_json,'r')
+  input_json_file_text=input_json_file:read("*all")
+
+  input_json_dict=json.decode(input_json_file_text)
+
 
   -- Check what all needs to be added here to accommodate the img_fact_feat
   local word_feat, img_feat, w_ques, w_img, mask = unpack(protos.word:forward({data.questions, data.images}))
@@ -246,17 +254,45 @@ local function eval_split(split)
 
   local q_ques, q_img = unpack(protos.ques:forward({conv_feat, data.ques_len, img_feat, mask}))
 
-  --local img_fact_feat_w=protos.img_fact_encoding_w:forward( { data.captions , w_ques  }  )
-  --collectgarbage() 
-  --local img_fact_feat_p=protos.img_fact_encoding_p:forward( { data.captions , p_ques  }  )
-  --collectgarbage()
-  local img_fact_feat_q=protos.img_fact_encoding_q:forward( { data.captions , q_ques  }  )
-  --collectgarbage()
-  --local feature_ensemble = {w_ques, w_img, p_ques, p_img, q_ques, q_img, img_fact_feat_w  , img_fact_feat_p, img_fact_feat_q}
-  local feature_ensemble = {w_ques, w_img, p_ques, p_img, q_ques, q_img, img_fact_feat_q  , img_fact_feat_q, img_fact_feat_q}
+  local img_fact_feat_w=protos.img_fact_encoding_w:forward( { data.captions , w_ques  }  )
+  collectgarbage() 
+--  local img_fact_feat_p=protos.img_fact_encoding_p:forward( { data.captions , p_ques  }  )
+--  collectgarbage()
+--  local img_fact_feat_q=protos.img_fact_encoding_q:forward( { data.captions , q_ques  }  )
+--  collectgarbage()
+--  local feature_ensemble = {w_ques, w_img, p_ques, p_img, q_ques, q_img, img_fact_feat_w  , img_fact_feat_p, img_fact_feat_q}
+  local feature_ensemble = {w_ques, w_img, p_ques, p_img, q_ques, q_img, img_fact_feat_w  , img_fact_feat_w, img_fact_feat_w}
   local out_feat = protos.atten:forward(feature_ensemble)
 
   collectgarbage()
+
+
+  for i=1,opt.batch_size do
+    print("Question")
+    --print(data.questions[i])
+    for j=1,data.questions[i]:size(1) do
+        if(data.questions[i][j]~=0) then
+            io.write(input_json_dict.ix_to_word[tostring(data.questions[i][j]) ] .. " ")
+        end
+    end
+
+    print("\nAnswer")
+    print(input_json_dict.ix_to_ans[ tostring(data.answer[i] )  ])
+
+   print("Captions")
+   for j=1,data.captions[i]:size(1) do 
+        io.write(tonumber(protos.img_fact_encoding_w.softmax_output[i][j][1]) .. " ")
+        for k=1,data.captions[i]:size(2) do
+            if(data.captions[i][j][k]~=0) then 
+                io.write( input_json_dict.ix_to_word[tostring(data.captions[i][j][k]) ].." ")
+            end
+        end
+        print("")
+   end
+
+  end
+
+
   -- forward the language model criterion
   local loss = protos.crit:forward(out_feat, data.answer)
 
@@ -278,103 +314,6 @@ local function eval_split(split)
 end
 
 
--------------------------------------------------------------------------------
--- Loss function
--------------------------------------------------------------------------------
---local iter = 0
-local function lossFun()        -- The MVP , see what the individual functions are doing 
-  protos.word:training()
-  grad_wparams:zero()  
-
-  protos.phrase:training()
-  grad_pparams:zero()
-
-  protos.ques:training()
-  grad_qparams:zero()
-
-  protos.atten:training()
-  grad_aparams:zero()
-
-  --protos.img_fact_encoding_w:training()
-  --grad_iwparams:zero()
-
-  --protos.img_fact_encoding_p:training()
-  --grad_ipparams:zero()
- 
-  protos.img_fact_encoding_q:training()
-  grad_iqparams:zero()
-  ----------------------------------------------------------------------------
-  -- Forward pass
-  -----------------------------------------------------------------------------
-  -- get batch of data  
-  local data = loader:getBatch{batch_size = opt.batch_size, split = 0}
-  if opt.gpuid >= 0 then
-    data.answer = data.answer:cuda()
-    data.questions = data.questions:cuda()
-    data.ques_len = data.ques_len:cuda()
-    data.images = data.images:cuda()
-    --data.img_fact=data.img_fact:cuda()
-    data.captions=data.captions:cuda()
-  end
-
-
-
-  -- Check what all needs to be modified in these files to accommodate img_fact_feat
-  local word_feat, img_feat, w_ques, w_img, mask = unpack(protos.word:forward({data.questions, data.images}))
-
-  local conv_feat, p_ques, p_img = unpack(protos.phrase:forward({word_feat, data.ques_len, img_feat, mask}))
-
-  local q_ques, q_img = unpack(protos.ques:forward({conv_feat, data.ques_len, img_feat, mask}))
- 
-  --local img_fact_feat_w=protos.img_fact_encoding_w:forward( { data.captions , w_ques  }  )
- 
-  --local img_fact_feat_p=protos.img_fact_encoding_p:forward( { data.captions , p_ques  }  )
-
-  local img_fact_feat_q=protos.img_fact_encoding_q:forward( { data.captions , q_ques  }  )
-
-  --local feature_ensemble = {w_ques, w_img, p_ques, p_img, q_ques, q_img, img_fact_feat_w  , img_fact_feat_p, img_fact_feat_q}
-  
-  local feature_ensemble = {w_ques, w_img, p_ques, p_img, q_ques, q_img, img_fact_feat_q  , img_fact_feat_q, img_fact_feat_q}
-
-  local out_feat = protos.atten:forward(feature_ensemble)
-  
-  -- forward the language model criterion
-  local loss = protos.crit:forward(out_feat, data.answer)
-  -----------------------------------------------------------------------------
-
-  collectgarbage()
-  -- Backward pass
-  -----------------------------------------------------------------------------
-  -- backprop criterion
-  local dlogprobs = protos.crit:backward(out_feat, data.answer)
-  
-  local d_w_ques, d_w_img, d_p_ques, d_p_img, d_q_ques, d_q_img ,  d_img_fact_feat_w  , d_img_fact_feat_p , d_img_fact_feat_q = unpack(protos.atten:backward(feature_ensemble, dlogprobs))
-
-  local d_ques_feat, d_ques_img = unpack(protos.ques:backward({conv_feat, data.ques_len, img_feat}, {d_q_ques, d_q_img}))
-    
-  --local d_ques1 = protos.bl1:backward({ques_feat_0, data.ques_len}, d_ques2)
-  local d_conv_feat, d_conv_img = unpack(protos.phrase:backward({word_feat, data.ques_len, img_feat}, {d_ques_feat, d_p_ques, d_p_img}))
-  
-  local dummy = protos.word:backward({data.questions, data.images}, {d_conv_feat, d_w_ques, d_w_img, d_conv_img, d_ques_img})
-
-  --local dummy2=protos.img_fact_encoding_w:backward( { data.captions, w_ques  } , { d_img_fact_feat_w   } )
-
-  --local dummy3=protos.img_fact_encoding_p:backward( { data.captions, p_ques  } , { d_img_fact_feat_p   } )
-  
-  local dummy4=protos.img_fact_encoding_q:backward( { data.captions, q_ques  } , { d_img_fact_feat_q   } )
-  collectgarbage()
- -- Check the modification that needs to be done to allow to backpropagate through image_fact_encoding
-  -- 
-  --
-  --
-  -----------------------------------------------------------------------------
-  -- and lets get out!
-  local stats = {}
-  stats.dt = dt
-  local losses = {}
-  losses.total_loss = loss
-  return losses, stats
-end
 
 -------------------------------------------------------------------------------
 -- Main loop
@@ -397,66 +336,11 @@ local timer = torch.Timer()
 local decay_factor = math.exp(math.log(0.1)/opt.learning_rate_decay_every/opt.iterPerEpoch)
 local learning_rate = opt.learning_rate
 -- create the path to save the model.
-paths.mkdir(opt.checkpoint_path .. '_' .. opt.co_atten_type)
+--paths.mkdir(opt.checkpoint_path .. '_' .. opt.co_atten_type)
 --os.execute('mkdir -p '..sys.dirname(opt.checkpoint_path .. '_' .. opt.co_atten_type))
-print("Directory to make")
-print( opt.checkpoint_path .. '_' .. opt.co_atten_type)
-while true do
-  -- eval loss/gradient
-  local losses, stats = lossFun()
-  ave_loss = ave_loss + losses.total_loss
-  -- decay the learning rate
-  if iter > opt.learning_rate_decay_start and opt.learning_rate_decay_start >= 0 then
-    learning_rate = learning_rate * decay_factor -- set the decayed rate
-  end
+--print("Directory to make")
+--print( opt.checkpoint_path .. '_' .. opt.co_atten_type)
 
-  if iter % opt.losses_log_every == 0 then
-    ave_loss = ave_loss / opt.losses_log_every
-    loss_history[iter] = losses.total_loss 
-    accuracy_history[iter] = ave_loss
-    learning_rate_history[iter] = learning_rate
+local val_loss, val_accu = eval_split(2)
+print('validation loss: ', val_loss, 'accuracy ', val_accu)
 
-    print(string.format('iter %d: %f, %f, %f, %f', iter, losses.total_loss, ave_loss, learning_rate, timer:time().real))
-
-    ave_loss = 0
-  end
-
-  -- save checkpoint once in a while (or on final iteration)
-  if (iter % opt.save_checkpoint_every == 0 or iter == opt.max_iters) then
-      local val_loss, val_accu = eval_split(2)
-      print('validation loss: ', val_loss, 'accuracy ', val_accu)
-
-      local checkpoint_path = path.join(opt.checkpoint_path .. '_' .. opt.co_atten_type, 'model_id' .. opt.id .. '_iter'.. iter)
-      torch.save(checkpoint_path..'.t7', {learning_rate=learning_rate,wparams=wparams, pparams = pparams, qparams=qparams, aparams=aparams, iwparams=iwparams ,  ipparams=ipparams ,  iqparams=iqparams ,lmOpt=lmOpt}) 
-
-      local checkpoint = {}
-      checkpoint.opt = opt
-      checkpoint.iter = iter
-      checkpoint.loss_history = loss_history
-      checkpoint.accuracy_history = accuracy_history
-      checkpoint.learning_rate_history = learning_rate_history
-
-      local checkpoint_path = path.join(opt.checkpoint_path .. '_' .. opt.co_atten_type, 'checkpoint' .. '.json')
-
-      --utils.write_json(checkpoint_path, checkpoint)
-      --print('wrote json checkpoint to ' .. checkpoint_path .. '.json')
-
-  end
-
-  -- perform a parameter update
-  if opt.optim == 'rmsprop' then
-    rmsprop(wparams, grad_wparams, learning_rate, opt.optim_alpha, opt.optim_epsilon, w_optim_state)
-    rmsprop(pparams, grad_pparams, learning_rate, opt.optim_alpha, opt.optim_epsilon, p_optim_state)
-    rmsprop(qparams, grad_qparams, learning_rate, opt.optim_alpha, opt.optim_epsilon, q_optim_state)
-    rmsprop(aparams, grad_aparams, learning_rate, opt.optim_alpha, opt.optim_epsilon, a_optim_state)
-    --rmsprop(iwparams, grad_iwparams, learning_rate, opt.optim_alpha, opt.optim_epsilon, iw_optim_state)
-    --rmsprop(ipparams, grad_ipparams, learning_rate, opt.optim_alpha, opt.optim_epsilon, ip_optim_state)
-    rmsprop(iqparams, grad_iqparams, learning_rate, opt.optim_alpha, opt.optim_epsilon, iq_optim_state)
-  else
-    error('bad option opt.optim')
-  end
-
-  iter = iter + 1
-  if opt.max_iters > 0 and iter >= opt.max_iters then break end -- stopping criterion
-  xlua.progress(iter, (tonumber(math.floor(iter/opt.save_checkpoint_every) )+1)*opt.save_checkpoint_every )
-end
